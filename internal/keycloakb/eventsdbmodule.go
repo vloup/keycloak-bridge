@@ -2,14 +2,18 @@ package keycloakb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	errorhandler "github.com/cloudtrust/common-service/errors"
 
 	"github.com/cloudtrust/common-service/database"
 	api "github.com/cloudtrust/keycloak-bridge/api/events"
+	api_stat "github.com/cloudtrust/keycloak-bridge/api/statistics"
 )
 
 // EventsDBModule is the interface of the audit events module.
@@ -19,6 +23,10 @@ type EventsDBModule interface {
 	GetEventsSummary(context.Context) (api.EventSummaryRepresentation, error)
 	GetLastConnection(context.Context, string) (int64, error)
 	GetTotalConnectionsCount(context.Context, string, string) (int64, error)
+	GetTotalConnectionsHoursCount(context.Context, string) ([][]int64, error)
+	GetTotalConnectionsDaysCount(context.Context, string) ([][]int64, error)
+	GetTotalConnectionsMonthsCount(context.Context, string) ([][]int64, error)
+	GetLastConnections(context.Context, string, string) ([]api_stat.StatisticsConnectionRepresentation, error)
 }
 
 type eventsDBModule struct {
@@ -62,10 +70,24 @@ const (
 		`
 	selectCountAuditEventsStmt        = `SELECT count(1) FROM audit ` + whereAuditEvents
 	selectLastConnectionTimeStmt      = `SELECT ifnull(unix_timestamp(max(audit_time)), 0) FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK'`
-	selectConnectionsCount            = `SELECT count(1) FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' AND date_add(audit_time, INTERVAL ##INTERVAL##)>now()`
 	selectAuditSummaryRealmStmt       = `SELECT distinct realm_name FROM audit;`
 	selectAuditSummaryOriginStmt      = `SELECT distinct origin FROM audit;`
 	selectAuditSummaryCtEventTypeStmt = `SELECT distinct ct_event_type FROM audit;`
+	selectConnectionsCount            = `SELECT count(1) FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' AND date_add(audit_time, INTERVAL ##INTERVAL##)>now()`
+	selectConnectionsHoursCount       = `SELECT count(1) FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' 
+										AND date_add(audit_time, INTERVAL 24 HOUR) > date_add(UTC_TIMESTAMP, INTERVAL (3600 - second(UTC_TIMESTAMP)) SECOND)
+										AND HOUR(audit_time) = HOUR(DATE_SUB(UTC_TIMESTAMP, INTERVAL ##OFFSET## HOUR));`
+	selectConnectionsDaysCount = `SELECT count(1) FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' 
+										AND date_add(audit_time, INTERVAL 30 DAY) > date_add(UTC_TIMESTAMP, INTERVAL (86400 - second(UTC_TIMESTAMP) - 60*MINUTE(UTC_TIMESTAMP) - 3600*HOUR(UTC_TIMESTAMP)) SECOND)
+										AND DAY(audit_time) = DAY(DATE_SUB(UTC_TIMESTAMP, INTERVAL ##OFFSET## DAY));`
+	selectConnectionsMonthsCount = `SELECT count(1) FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' 
+										AND date_add(audit_time, INTERVAL 12 MONTH) > date_format(date_add(UTC_TIMESTAMP, INTERVAL 1 MONTH), '%Y-%m-01')
+										AND MONTH(audit_time) = MONTH(DATE_SUB(UTC_TIMESTAMP, INTERVAL ##OFFSET## MONTH));`
+	selectConnectionStmt = `SELECT unix_timestamp(audit_time), ct_event_type, username, additional_info 
+							FROM audit WHERE realm_name=? AND (ct_event_type='LOGON_OK' OR ct_event_type='LOGON_ERROR') 	
+							ORDER BY audit_time DESC
+							LIMIT ?;
+				`
 )
 
 func createAuditEventsParametersFromMap(m map[string]string) (selectAuditEventsParameters, error) {
@@ -166,6 +188,110 @@ func (cm *eventsDBModule) GetTotalConnectionsCount(_ context.Context, realmName 
 	var res = int64(0)
 	var row = cm.db.QueryRow(strings.ReplaceAll(selectConnectionsCount, "##INTERVAL##", durationLabel), realmName)
 	err = row.Scan(&res)
+	return res, err
+}
+
+// GetTotalConnectionsHoursCount gets the number of connections for the given realm for the last 24 hours, hour by hour
+func (cm *eventsDBModule) GetTotalConnectionsHoursCount(_ context.Context, realmName string) ([][]int64, error) {
+
+	var err error
+	var nbHours = 24
+	var nbConnections = int64(0)
+	var res = make([][]int64, nbHours)
+	for i := 0; i < nbHours; i++ {
+		res[i] = make([]int64, 2)
+		var row = cm.db.QueryRow(strings.ReplaceAll(selectConnectionsHoursCount, "##OFFSET##", strconv.Itoa(i)), realmName)
+		err = row.Scan(&nbConnections)
+		if time.Now().UTC().Hour()-(i+1) < 0 {
+			res[i][0] = int64(24 + (time.Now().UTC().Hour() - i))
+		} else {
+			res[i][0] = int64((time.Now().UTC().Hour() - i))
+		}
+		res[i][1] = nbConnections
+	}
+
+	return res, err
+}
+
+// GetTotalConnectionsHoursCount gets the number of connections for the given realm for the last 30 days, day by day
+func (cm *eventsDBModule) GetTotalConnectionsDaysCount(_ context.Context, realmName string) ([][]int64, error) {
+
+	var err error
+	var nbDays = 30
+	var nbConnections = int64(0)
+	var res = make([][]int64, nbDays)
+
+	// we need to know how many days the previous month has
+	now := time.Now()
+	currentYear, currentMonth, _ := now.Date()
+	currentLocation := now.Location()
+	firstOfPrevMonth := time.Date(currentYear, currentMonth-1, 1, 0, 0, 0, 0, currentLocation)
+	lastOfPrevMonth := firstOfPrevMonth.AddDate(0, 1, -1)
+	nbDaysLastMonth := lastOfPrevMonth.Day()
+	dayToday := time.Now().UTC().Day()
+
+	for i := 0; i < nbDays; i++ {
+		res[i] = make([]int64, 2)
+		var row = cm.db.QueryRow(strings.ReplaceAll(selectConnectionsDaysCount, "##OFFSET##", strconv.Itoa(i)), realmName)
+		err = row.Scan(&nbConnections)
+
+		if dayToday-(i+1) < 0 {
+			res[i][0] = int64(nbDaysLastMonth + (dayToday - i))
+		} else {
+			res[i][0] = int64(dayToday - i)
+		}
+		res[i][1] = nbConnections
+	}
+
+	return res, err
+}
+
+// GetTotalConnectionsHoursCount gets the number of connections for the given realm for the last 24 hours, hour by hour
+func (cm *eventsDBModule) GetTotalConnectionsMonthsCount(_ context.Context, realmName string) ([][]int64, error) {
+
+	var err error
+	var nbMonths = 12
+	var nbConnections = int64(0)
+	var res = make([][]int64, nbMonths)
+	var currentMonth = int(time.Now().UTC().Month())
+	for i := 0; i < nbMonths; i++ {
+		res[i] = make([]int64, 2)
+		var row = cm.db.QueryRow(strings.ReplaceAll(selectConnectionsMonthsCount, "##OFFSET##", strconv.Itoa(i)), realmName)
+		err = row.Scan(&nbConnections)
+		if currentMonth-(i+1) < 0 {
+			res[i][0] = int64(12 + (currentMonth - i))
+		} else {
+			res[i][0] = int64(currentMonth - i)
+		}
+		res[i][1] = nbConnections
+	}
+
+	return res, err
+}
+
+// GetLastConnections gives information on the last authentications
+func (cm *eventsDBModule) GetLastConnections(_ context.Context, realmName string, nbConnections string) ([]api_stat.StatisticsConnectionRepresentation, error) {
+
+	var res = []api_stat.StatisticsConnectionRepresentation{}
+	rows, err := cm.db.Query(selectConnectionStmt, realmName, nbConnections)
+	if err != nil {
+		return res, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var dbc api_stat.DbConnectionRepresentation
+		var addInfos string
+		err = rows.Scan(&dbc.Date, &dbc.Result, &dbc.User, &addInfos)
+		if err != nil {
+			return res, err
+		}
+		var infos map[string]string
+		_ = json.Unmarshal([]byte(addInfos), &infos)
+		dbc.IP = string(infos["ip_address"])
+		res = append(res, dbc.ToConnRepresentation())
+	}
+
 	return res, err
 }
 

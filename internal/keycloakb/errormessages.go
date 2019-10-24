@@ -51,4 +51,6 @@ const (
 	ClientID           = "clientId"
 	RedirectURI        = "redirectURI"
 	Exclude            = "exclude"
+	Unit               = "unit"
+	Max                = "max"
 )
