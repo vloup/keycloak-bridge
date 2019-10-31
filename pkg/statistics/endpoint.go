@@ -59,6 +59,7 @@ func MakeGetStatisticsAuthenticationsEndpoint(ec Component) cs.Endpoint {
 func MakeGetStatisticsAuthenticationsLogEndpoint(ec Component) cs.Endpoint {
 	return func(ctx context.Context, req interface{}) (interface{}, error) {
 		var m = req.(map[string]string)
+		_, ok := m["max"]
 		if !ok {
 			return nil, errorhandler.CreateMissingParameterError(internal.Max)
 		}
