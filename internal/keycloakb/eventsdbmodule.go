@@ -199,15 +199,15 @@ func (cm *eventsDBModule) GetTotalConnectionsHoursCount(_ context.Context, realm
 	var nbConnections = int64(0)
 	var res = make([][]int64, nbHours)
 	for i := 0; i < nbHours; i++ {
-		res[i] = make([]int64, 2)
+		res[nbHours-i-1] = make([]int64, 2)
 		var row = cm.db.QueryRow(strings.ReplaceAll(selectConnectionsHoursCount, "##OFFSET##", strconv.Itoa(i)), realmName)
 		err = row.Scan(&nbConnections)
 		if time.Now().UTC().Hour()-(i+1) < 0 {
-			res[i][0] = int64(24 + (time.Now().UTC().Hour() - i))
+			res[nbHours-i-1][0] = int64(24 + (time.Now().UTC().Hour() - i))
 		} else {
-			res[i][0] = int64((time.Now().UTC().Hour() - i))
+			res[nbHours-i-1][0] = int64((time.Now().UTC().Hour() - i))
 		}
-		res[i][1] = nbConnections
+		res[nbHours-i-1][1] = nbConnections
 	}
 
 	return res, err
@@ -231,16 +231,16 @@ func (cm *eventsDBModule) GetTotalConnectionsDaysCount(_ context.Context, realmN
 	dayToday := time.Now().UTC().Day()
 
 	for i := 0; i < nbDays; i++ {
-		res[i] = make([]int64, 2)
+		res[nbDays-i-1] = make([]int64, 2)
 		var row = cm.db.QueryRow(strings.ReplaceAll(selectConnectionsDaysCount, "##OFFSET##", strconv.Itoa(i)), realmName)
 		err = row.Scan(&nbConnections)
 
 		if dayToday-(i+1) < 0 {
-			res[i][0] = int64(nbDaysLastMonth + (dayToday - i))
+			res[nbDays-i-1][0] = int64(nbDaysLastMonth + (dayToday - i))
 		} else {
-			res[i][0] = int64(dayToday - i)
+			res[nbDays-i-1][0] = int64(dayToday - i)
 		}
-		res[i][1] = nbConnections
+		res[nbDays-i-1][1] = nbConnections
 	}
 
 	return res, err
@@ -255,15 +255,15 @@ func (cm *eventsDBModule) GetTotalConnectionsMonthsCount(_ context.Context, real
 	var res = make([][]int64, nbMonths)
 	var currentMonth = int(time.Now().UTC().Month())
 	for i := 0; i < nbMonths; i++ {
-		res[i] = make([]int64, 2)
+		res[nbMonths-i-1] = make([]int64, 2)
 		var row = cm.db.QueryRow(strings.ReplaceAll(selectConnectionsMonthsCount, "##OFFSET##", strconv.Itoa(i)), realmName)
 		err = row.Scan(&nbConnections)
 		if currentMonth-(i+1) < 0 {
-			res[i][0] = int64(12 + (currentMonth - i))
+			res[nbMonths-i-1][0] = int64(12 + (currentMonth - i))
 		} else {
-			res[i][0] = int64(currentMonth - i)
+			res[nbMonths-i-1][0] = int64(currentMonth - i)
 		}
-		res[i][1] = nbConnections
+		res[nbMonths-i-1][1] = nbConnections
 	}
 
 	return res, err
