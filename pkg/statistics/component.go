@@ -69,7 +69,7 @@ func (ec *component) GetStatistics(ctx context.Context, realmName string) (api.S
 	return res, err
 }
 
-// GetStatisticsUsers gives  statistics on the total number of users and on those that are inactive or disabled
+// GetStatisticsUsers gives statistics on the total number of users and on those that are inactive or disabled
 func (ec *component) GetStatisticsUsers(ctx context.Context, realmName string) (api.StatisticsUsersRepresentation, error) {
 	var err error
 	var accessToken = ctx.Value(cs.CtContextAccessToken).(string)
@@ -126,8 +126,6 @@ func (ec *component) GetStatisticsAuthentications(ctx context.Context, realmName
 func (ec *component) GetStatisticsAuthenticationsLog(ctx context.Context, realmName string, max string) ([]api.StatisticsConnectionRepresentation, error) {
 
 	var res []api.StatisticsConnectionRepresentation
-	//var err error
-	// query to get number of authentications
 
 	res, err := ec.db.GetLastConnections(ctx, realmName, max)
 	if err != nil {

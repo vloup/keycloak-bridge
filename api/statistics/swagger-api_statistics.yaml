@@ -156,7 +156,9 @@ components:
       items:
         type: array
         items:
-          type: integer        
+          type: integer  
+        minItems: 2
+        maxItems: 2        
     StatisticsConnection:
       type: object
       properties:

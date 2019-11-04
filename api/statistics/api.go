@@ -3,6 +3,7 @@ package stats_api
 import (
 	"database/sql"
 
+	api_events "github.com/cloudtrust/keycloak-bridge/api/events"
 	kc "github.com/cloudtrust/keycloak-client"
 )
 
@@ -49,20 +50,12 @@ type DbConnectionRepresentation struct {
 	IP     string
 }
 
-//copied from events api
-func toString(sqlValue sql.NullString) string {
-	if sqlValue.Valid {
-		return sqlValue.String
-	}
-	return ""
-}
-
 // ToConnRepresentation converts a DbConnectionRepresentation to a serializable value
 func (dbc *DbConnectionRepresentation) ToConnRepresentation() StatisticsConnectionRepresentation {
 	return StatisticsConnectionRepresentation{
-		Date:   toString(dbc.Date),
-		Result: toString(dbc.Result),
-		User:   toString(dbc.User),
+		Date:   api_events.ToString(dbc.Date),
+		Result: api_events.ToString(dbc.Result),
+		User:   api_events.ToString(dbc.User),
 		IP:     dbc.IP,
 	}
 }

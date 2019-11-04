@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
 
 	errorhandler "github.com/cloudtrust/common-service/errors"
 
@@ -74,15 +72,18 @@ const (
 	selectAuditSummaryOriginStmt      = `SELECT distinct origin FROM audit;`
 	selectAuditSummaryCtEventTypeStmt = `SELECT distinct ct_event_type FROM audit;`
 	selectConnectionsCount            = `SELECT count(1) FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' AND date_add(audit_time, INTERVAL ##INTERVAL##)>now()`
-	selectConnectionsHoursCount       = `SELECT count(1) FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' 
-										AND date_add(audit_time, INTERVAL 24 HOUR) > date_add(UTC_TIMESTAMP, INTERVAL (3600 - second(UTC_TIMESTAMP)) SECOND)
-										AND HOUR(audit_time) = HOUR(DATE_SUB(UTC_TIMESTAMP, INTERVAL ##OFFSET## HOUR));`
-	selectConnectionsDaysCount = `SELECT count(1) FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' 
-										AND date_add(audit_time, INTERVAL 30 DAY) > date_add(UTC_TIMESTAMP, INTERVAL (86400 - second(UTC_TIMESTAMP) - 60*MINUTE(UTC_TIMESTAMP) - 3600*HOUR(UTC_TIMESTAMP)) SECOND)
-										AND DAY(audit_time) = DAY(DATE_SUB(UTC_TIMESTAMP, INTERVAL ##OFFSET## DAY));`
-	selectConnectionsMonthsCount = `SELECT count(1) FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' 
-										AND date_add(audit_time, INTERVAL 12 MONTH) > date_format(date_add(UTC_TIMESTAMP, INTERVAL 1 MONTH), '%Y-%m-01')
-										AND MONTH(audit_time) = MONTH(DATE_SUB(UTC_TIMESTAMP, INTERVAL ##OFFSET## MONTH));`
+	selectConnectionsHoursCount       = `SELECT date_format(audit_time, '%H'), count(1) 
+											FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' 
+											AND date_add(audit_time, INTERVAL 24 HOUR) > date_add(UTC_TIMESTAMP, INTERVAL (3600 - second(UTC_TIMESTAMP)) SECOND)
+											GROUP by date_format(audit_time, '%Y-%m-%d %H');`
+	selectConnectionsDaysCount = `SELECT date_format(audit_time, '%d'),  count(1) 
+									FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' 
+									AND date_add(audit_time, INTERVAL 30 DAY) > date_add(UTC_TIMESTAMP, INTERVAL (86400 - second(UTC_TIMESTAMP) - 60*MINUTE(UTC_TIMESTAMP) - 3600*HOUR(UTC_TIMESTAMP)) SECOND)
+									GROUP by date_format(audit_time, '%Y-%m-%d');`
+	selectConnectionsMonthsCount = `SELECT date_format(audit_time, '%m'), count(1) 
+									FROM audit WHERE realm_name=? AND ct_event_type='LOGON_OK' 
+									AND date_add(audit_time, INTERVAL 12 MONTH) > date_format(date_add(UTC_TIMESTAMP, INTERVAL 1 MONTH), '%Y-%m-01')
+									GROUP by date_format(audit_time, '%Y-%m');`
 	selectConnectionStmt = `SELECT unix_timestamp(audit_time), ct_event_type, username, additional_info 
 							FROM audit WHERE realm_name=? AND (ct_event_type='LOGON_OK' OR ct_event_type='LOGON_ERROR') 	
 							ORDER BY audit_time DESC
@@ -107,6 +108,31 @@ func createAuditEventsParametersFromMap(m map[string]string) (selectAuditEventsP
 		return res, errorhandler.CreateInvalidQueryParameterError(Exclude)
 	}
 	return res, nil
+}
+
+func (cm *eventsDBModule) executeConnectionsQuery(query string, realmName string) ([][]int64, error) {
+	var res [][]int64
+
+	rows, err := cm.db.Query(query, realmName)
+	if err != nil {
+		return res, err
+	}
+	defer rows.Close()
+
+	var unitConn int64
+	var nbConns int64
+	for rows.Next() {
+		var unit = make([]int64, 2)
+		err = rows.Scan(&unitConn, &nbConns)
+		if err != nil {
+			return res, err
+		}
+		unit[0] = unitConn
+		unit[1] = nbConns
+		res = append(res, unit)
+	}
+
+	return res, rows.Err()
 }
 
 // GetEvents gets the count of events matching some criterias (dateFrom, dateTo, realm, ...)
@@ -194,79 +220,21 @@ func (cm *eventsDBModule) GetTotalConnectionsCount(_ context.Context, realmName 
 // GetTotalConnectionsHoursCount gets the number of connections for the given realm for the last 24 hours, hour by hour
 func (cm *eventsDBModule) GetTotalConnectionsHoursCount(_ context.Context, realmName string) ([][]int64, error) {
 
-	var err error
-	var nbHours = 24
-	var nbConnections = int64(0)
-	var res = make([][]int64, nbHours)
-	for i := 0; i < nbHours; i++ {
-		res[nbHours-i-1] = make([]int64, 2)
-		var row = cm.db.QueryRow(strings.ReplaceAll(selectConnectionsHoursCount, "##OFFSET##", strconv.Itoa(i)), realmName)
-		err = row.Scan(&nbConnections)
-		if time.Now().UTC().Hour()-(i+1) < 0 {
-			res[nbHours-i-1][0] = int64(24 + (time.Now().UTC().Hour() - i))
-		} else {
-			res[nbHours-i-1][0] = int64((time.Now().UTC().Hour() - i))
-		}
-		res[nbHours-i-1][1] = nbConnections
-	}
-
-	return res, err
+	//check the last 24 hours of connections
+	return cm.executeConnectionsQuery(selectConnectionsHoursCount, realmName)
 }
 
 // GetTotalConnectionsHoursCount gets the number of connections for the given realm for the last 30 days, day by day
 func (cm *eventsDBModule) GetTotalConnectionsDaysCount(_ context.Context, realmName string) ([][]int64, error) {
 
-	var err error
-	var nbDays = 30
-	var nbConnections = int64(0)
-	var res = make([][]int64, nbDays)
-
-	// we need to know how many days the previous month has
-	now := time.Now()
-	currentYear, currentMonth, _ := now.Date()
-	currentLocation := now.Location()
-	firstOfPrevMonth := time.Date(currentYear, currentMonth-1, 1, 0, 0, 0, 0, currentLocation)
-	lastOfPrevMonth := firstOfPrevMonth.AddDate(0, 1, -1)
-	nbDaysLastMonth := lastOfPrevMonth.Day()
-	dayToday := time.Now().UTC().Day()
-
-	for i := 0; i < nbDays; i++ {
-		res[nbDays-i-1] = make([]int64, 2)
-		var row = cm.db.QueryRow(strings.ReplaceAll(selectConnectionsDaysCount, "##OFFSET##", strconv.Itoa(i)), realmName)
-		err = row.Scan(&nbConnections)
-
-		if dayToday-(i+1) < 0 {
-			res[nbDays-i-1][0] = int64(nbDaysLastMonth + (dayToday - i))
-		} else {
-			res[nbDays-i-1][0] = int64(dayToday - i)
-		}
-		res[nbDays-i-1][1] = nbConnections
-	}
-
-	return res, err
+	//check the last 30 days of connections
+	return cm.executeConnectionsQuery(selectConnectionsDaysCount, realmName)
 }
 
 // GetTotalConnectionsHoursCount gets the number of connections for the given realm for the last 24 hours, hour by hour
 func (cm *eventsDBModule) GetTotalConnectionsMonthsCount(_ context.Context, realmName string) ([][]int64, error) {
-
-	var err error
-	var nbMonths = 12
-	var nbConnections = int64(0)
-	var res = make([][]int64, nbMonths)
-	var currentMonth = int(time.Now().UTC().Month())
-	for i := 0; i < nbMonths; i++ {
-		res[nbMonths-i-1] = make([]int64, 2)
-		var row = cm.db.QueryRow(strings.ReplaceAll(selectConnectionsMonthsCount, "##OFFSET##", strconv.Itoa(i)), realmName)
-		err = row.Scan(&nbConnections)
-		if currentMonth-(i+1) < 0 {
-			res[nbMonths-i-1][0] = int64(12 + (currentMonth - i))
-		} else {
-			res[nbMonths-i-1][0] = int64(currentMonth - i)
-		}
-		res[nbMonths-i-1][1] = nbConnections
-	}
-
-	return res, err
+	//check the last 12 months of connections
+	return cm.executeConnectionsQuery(selectConnectionsMonthsCount, realmName)
 }
 
 // GetLastConnections gives information on the last authentications
