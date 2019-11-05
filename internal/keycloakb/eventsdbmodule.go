@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -134,7 +133,6 @@ func (cm *eventsDBModule) executeConnectionsQuery(query string, realmName string
 		res = append(res, unit)
 	}
 
-	fmt.Println(res)
 	return res, rows.Err()
 }
 
@@ -275,6 +273,7 @@ func (cm *eventsDBModule) GetTotalConnectionsDaysCount(_ context.Context, realmN
 		nbDaysRecorded = nbDaysLastMonth
 	}
 	var res = make([][]int64, nbDaysRecorded)
+	//TODO: change the query such that it returns the correct values when we are 1st of March
 
 	//initalize the result
 	for i := 0; i < nbDaysRecorded; i++ {
