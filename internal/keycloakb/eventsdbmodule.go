@@ -6,6 +6,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"time"
 
 	errorhandler "github.com/cloudtrust/common-service/errors"
 
@@ -221,7 +222,24 @@ func (cm *eventsDBModule) GetTotalConnectionsCount(_ context.Context, realmName 
 func (cm *eventsDBModule) GetTotalConnectionsHoursCount(_ context.Context, realmName string) ([][]int64, error) {
 
 	//check the last 24 hours of connections
-	return cm.executeConnectionsQuery(selectConnectionsHoursCount, realmName)
+	resDB, err := cm.executeConnectionsQuery(selectConnectionsHoursCount, realmName)
+	if err != nil {
+		return [][]int64{}, err
+	}
+
+	var nbHours = 24
+	var res = make([][]int64, nbHours)
+	var hourNow = time.Now().UTC().Hour()
+	//initalize the result
+	for i := 0; i < 24; i++ {
+		res[nbHours-i-1] = make([]int64, 2)
+		res[nbHours-i-1][0] = int64((hourNow - i + nbHours) % nbHours)
+	}
+	for _, resHour := range resDB {
+		res[resHour[0]][1] = resHour[1]
+	}
+	return res, nil
+
 }
 
 // GetTotalConnectionsHoursCount gets the number of connections for the given realm for the last 30 days, day by day
