@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -133,6 +134,7 @@ func (cm *eventsDBModule) executeConnectionsQuery(query string, realmName string
 		res = append(res, unit)
 	}
 
+	fmt.Println(res)
 	return res, rows.Err()
 }
 
@@ -230,13 +232,18 @@ func (cm *eventsDBModule) GetTotalConnectionsHoursCount(_ context.Context, realm
 	var nbHours = 24
 	var res = make([][]int64, nbHours)
 	var hourNow = time.Now().UTC().Hour()
+
 	//initalize the result
-	for i := 0; i < 24; i++ {
+	for i := 0; i < nbHours; i++ {
 		res[nbHours-i-1] = make([]int64, 2)
 		res[nbHours-i-1][0] = int64((hourNow - i + nbHours) % nbHours)
 	}
+	// shift in the slice
+	shift := int64(nbHours - hourNow)
+
+	//fill the result array with the result of the DB
 	for _, resHour := range resDB {
-		res[resHour[0]][1] = resHour[1]
+		res[(shift+resHour[0]-1)%int64(nbHours)][1] = resHour[1]
 	}
 	return res, nil
 
@@ -246,13 +253,78 @@ func (cm *eventsDBModule) GetTotalConnectionsHoursCount(_ context.Context, realm
 func (cm *eventsDBModule) GetTotalConnectionsDaysCount(_ context.Context, realmName string) ([][]int64, error) {
 
 	//check the last 30 days of connections
-	return cm.executeConnectionsQuery(selectConnectionsDaysCount, realmName)
+	resDB, err := cm.executeConnectionsQuery(selectConnectionsDaysCount, realmName)
+	if err != nil {
+		return [][]int64{}, err
+	}
+
+	var nbDays = 30
+
+	// we need to know how many days the previous month has
+	now := time.Now()
+	currentYear, currentMonth, _ := now.Date()
+	currentLocation := now.Location()
+	firstOfPrevMonth := time.Date(currentYear, currentMonth-1, 1, 0, 0, 0, 0, currentLocation)
+	lastOfPrevMonth := firstOfPrevMonth.AddDate(0, 1, -1)
+	nbDaysLastMonth := lastOfPrevMonth.Day()
+	dayToday := time.Now().UTC().Day()
+
+	// february - in this case we return only 28 or 29 days
+	var nbDaysRecorded = nbDays
+	if nbDaysLastMonth < nbDays {
+		nbDaysRecorded = nbDaysLastMonth
+	}
+	var res = make([][]int64, nbDaysRecorded)
+
+	//initalize the result
+	for i := 0; i < nbDaysRecorded; i++ {
+		res[nbDaysRecorded-i-1] = make([]int64, 2)
+		if dayToday-(i+1) < 0 {
+			res[nbDaysRecorded-i-1][0] = int64(nbDaysLastMonth + (dayToday - i))
+		} else {
+			res[nbDaysRecorded-i-1][0] = int64(dayToday - i)
+		}
+	}
+	// shift in the slice
+	shift := int64(nbDaysRecorded - dayToday)
+
+	//fill the result array with the result of the DB
+	for _, resDay := range resDB {
+		res[(shift+resDay[0]-1)%int64(nbDaysLastMonth)][1] = resDay[1]
+	}
+	return res, nil
 }
 
 // GetTotalConnectionsHoursCount gets the number of connections for the given realm for the last 24 hours, hour by hour
 func (cm *eventsDBModule) GetTotalConnectionsMonthsCount(_ context.Context, realmName string) ([][]int64, error) {
 	//check the last 12 months of connections
-	return cm.executeConnectionsQuery(selectConnectionsMonthsCount, realmName)
+	resDB, err := cm.executeConnectionsQuery(selectConnectionsMonthsCount, realmName)
+	if err != nil {
+		return [][]int64{}, err
+	}
+
+	var nbMonths = 12
+	var res = make([][]int64, nbMonths)
+	var currentMonth = int(time.Now().UTC().Month())
+
+	//initalize the result
+	for i := 0; i < nbMonths; i++ {
+		res[nbMonths-i-1] = make([]int64, 2)
+		if currentMonth-(i+1) < 0 {
+			res[nbMonths-i-1][0] = int64(12 + (currentMonth - i))
+		} else {
+			res[nbMonths-i-1][0] = int64(currentMonth - i)
+		}
+	}
+	// shift in the slice
+	shift := int64(nbMonths - currentMonth)
+
+	//fill the result array with the result of the DB
+	for _, resMonth := range resDB {
+		res[(shift+resMonth[0]-1)%int64(nbMonths)][1] = resMonth[1]
+	}
+	return res, nil
+
 }
 
 // GetLastConnections gives information on the last authentications
